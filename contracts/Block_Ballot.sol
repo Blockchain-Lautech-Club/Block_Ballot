@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-contract BlockBallot {
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+
+contract BlockBallotWithSBT is ERC721Enumerable {
+    uint256 private tokenIdCounter;
     uint256 private useless;
 
-    constructor() {
+    constructor() ERC721("ElectionSoulboundToken", "ESBT") {
+        tokenIdCounter = 1; // Start token IDs at 1
         useless = 326723; 
         electionCount = 0;
     }
@@ -21,23 +26,23 @@ contract BlockBallot {
     }
 
     struct Voter {
-    address voterAddress;
-    bool isRegistered;
-    bool hasVoted;
-    uint256 votedCandidateId;
-    uint64 OTP;           
-    uint256 phoneNumber;  
-    uint256 timeRegister;  
-}
-struct Election {
-    ElectionDetails details;
-    Candidate[] candidates;
-    mapping(address => Voter) voters;
-    address[] voterList;
-    address[] votersWhoHaveVoted; 
-    uint256 winnerId; 
-}
+        address voterAddress;
+        bool isRegistered;
+        bool hasVoted;
+        uint256 votedCandidateId;
+        uint64 OTP;           
+        uint256 phoneNumber;  
+        uint256 timeRegister;  
+    }
 
+    struct Election {
+        ElectionDetails details;
+        Candidate[] candidates;
+        mapping(address => Voter) voters;
+        address[] voterList;
+        address[] votersWhoHaveVoted; 
+        uint256 winnerId; 
+    }
 
     struct ElectionDetails {
         uint256 electionID;
@@ -57,30 +62,30 @@ struct Election {
         bool electionAvailability; 
         string governingBody;
         string governingBodyCover;
-        
     }
 
     struct ElectionData {
-    ElectionDetails details;
-    Candidate[] candidates;
-}
-
-    struct GeneratedNumber {
-        uint256 number;
-        uint256 timestamp;
+        ElectionDetails details;
+        Candidate[] candidates;
     }
 
-    
+    struct SoulboundToken {
+        uint256 tokenId;
+        uint256 electionId;
+        address owner;
+        bool isUsed; // Marks if the token has been used for voting
+    }
 
     mapping(uint256 => Election) public elections;
     mapping(uint256 => uint256) private nextCandidateId;
     mapping(address => uint256[]) private electionsByAdmin;
-    mapping(address => GeneratedNumber[]) private generatedNumbers;
+    mapping(address => SoulboundToken[]) public soulboundTokensByOwner; // Owner's tokens
+    mapping(uint256 => mapping(address => uint256)) public electionToToken; // Maps electionId and wallet to tokenId
+    mapping(uint256 => SoulboundToken) public soulboundTokens; // Maps tokenId to details
 
     uint256 public electionCount;
 
     // Events
-
     event ElectionCreated(
         uint256 indexed electionId,
         address indexed admin,
@@ -106,63 +111,28 @@ struct Election {
         uint256 addedTime
     );
 
-    event CandidateRemoved(
-        uint256 indexed electionId,
-        uint256 candidateId
-    );
+    event CandidateRemoved(uint256 indexed electionId, uint256 candidateId);
 
-    event ElectionStarted(
-        uint256 indexed electionId,
-        uint256 startTime
-    );
+    event ElectionStarted(uint256 indexed electionId, uint256 startTime);
 
-    event ElectionEnded(
-        uint256 indexed electionId,
-        uint256 endTime
-    );
+    event ElectionEnded(uint256 indexed electionId, uint256 endTime);
 
-    event VoterRegistered(
-        uint256 indexed electionId,
-        address indexed voterAddress
-    );
+    event VoterRegistered(uint256 indexed electionId, address indexed voterAddress);
 
-    event Voted(
-        uint256 indexed electionId,
-        address indexed voterAddress,
-        uint256 candidateId
-    );
+    event Voted(uint256 indexed electionId, address indexed voterAddress, uint256 candidateId);
 
-    event WinnerAnnounced(
-        uint256 indexed electionId,
-        uint256 indexed winnerId,
-        string winnerName,
-        uint256 voteCount
-    );
+    event WinnerAnnounced(uint256 indexed electionId, uint256 indexed winnerId, string winnerName, uint256 voteCount);
 
-    event ElectionClosed(
-        uint256 indexed electionId,
-        uint256 closedTime
-    );
+    event ElectionClosed(uint256 indexed electionId, uint256 closedTime);
 
     // Modifiers
-
     modifier onlyAdmin(uint256 electionId) {
         require(elections[electionId].details.admin == msg.sender, "Only the admin can perform this action.");
         _;
     }
     
-    modifier onlyOwner(address owner) {
-        require(msg.sender == owner, "Invalid user");
-        _;
-    }
-
     modifier electionExists(uint256 electionId) {
         require(electionId > 0 && electionId <= electionCount, "Election does not exist.");
-        _;
-    }
-
-    modifier electionEnded(uint256 electionId) {
-        require(elections[electionId].details.hasEnded, "Election has not ended.");
         _;
     }
 
@@ -171,8 +141,7 @@ struct Election {
         _;
     }
 
-    // Functions
-
+    // Core Election Functions
     function createElection(
         string memory adminName,
         string memory title,
@@ -212,59 +181,17 @@ struct Election {
         nextCandidateId[electionCount] = 1;
         electionsByAdmin[msg.sender].push(electionCount);
 
-        emit ElectionCreated(
-            electionCount,
-            msg.sender,
-            adminName,
-            title,
-            description,
-            coverPhoto
-        );
+        emit ElectionCreated(electionCount, msg.sender, adminName, title, description, coverPhoto);
     }
 
-    function updateElection(
-        uint256 electionId,
-        string memory adminName,
-        string memory title,
-        string memory description,
-        string memory coverPhoto,
-        string memory governingBody,
-        string memory country, 
-        string memory photo, 
-        uint256 registrationStart,
-        uint256 registrationStop
-    ) public electionExists(electionId) onlyAdmin(electionId) {
-        require(!elections[electionId].details.hasStarted, "Cannot update election after it has started.");
-
-        ElectionDetails storage details = elections[electionId].details;
-        details.adminName = adminName;
-        details.electionTitle = title;
-        details.electionDescription = description;
-        details.electionCoverPhoto = coverPhoto;
-        details.electionTimeCreated = block.timestamp;
-        details.electionRegistrationStartTime = registrationStart;
-        details.electionRegistrationEndTime = registrationStop;
-        details.electionCountry = country;
-        details.electionAvailability = true;
-        details.governingBody = governingBody;
-        details.governingBodyCover = photo;
-
-        emit ElectionUpdated(
-            electionId,
-            adminName,
-            title,
-            description,
-            coverPhoto
-        );
-    }
-
+    // Add Candidate
     function addCandidate(
         uint256 electionId,
         string memory candidateName,
         string memory candidatePoliticalParty,
         string memory candidatePortrait
     ) public electionExists(electionId) onlyAdmin(electionId) {
-        require(!elections[electionId].details.hasStarted, "Cannot add candidates after the election has started.");
+        require(electionToToken[electionId][msg.sender] == 0, "Registered voter cannot be a candidate.");
 
         uint256 candidateId = nextCandidateId[electionId];
 
@@ -279,131 +206,36 @@ struct Election {
 
         nextCandidateId[electionId]++;
 
-        emit CandidateAdded(
-            electionId,
-            candidateId,
-            candidateName,
-            candidatePoliticalParty,
-            block.timestamp
-        );
+        emit CandidateAdded(electionId, candidateId, candidateName, candidatePoliticalParty, block.timestamp);
     }
 
-    function removeCandidate(uint256 electionId, uint256 candidateId) public electionExists(electionId) onlyAdmin(electionId) {
-        require(!elections[electionId].details.hasStarted, "Cannot remove candidates after the election has started.");
-
-        int256 candidateIndex = -1;
-        for (uint256 i = 0; i < elections[electionId].candidates.length; i++) {
-            if (elections[electionId].candidates[i].id == candidateId) {
-                candidateIndex = int256(i);
-                break;
-            }
-        }
-
-        require(candidateIndex >= 0, "Candidate does not exist.");
-
-        uint256 index = uint256(candidateIndex);
-        uint256 lastIndex = elections[electionId].candidates.length - 1;
-
-        if (index != lastIndex) {
-            elections[electionId].candidates[index] = elections[electionId].candidates[lastIndex];
-        }
-
-        elections[electionId].candidates.pop();
-
-        emit CandidateRemoved(
-            electionId,
-            candidateId
-        );
-    }
-
-    function changeElectionAdmin(uint256 electionId, address newAdmin) 
-    public 
-    electionExists(electionId) 
-    onlyAdmin(electionId) 
-{
-    require(newAdmin != address(0), "New admin address cannot be zero.");
-    elections[electionId].details.admin = newAdmin;
-}
-
-    function getElectionSummary(uint256 electionId) 
-    public 
-    view 
-    electionExists(electionId) 
-    returns (
-        string memory title, 
-        uint256 totalCandidates, 
-        uint256 totalVoters, 
-        uint256 votersWhoVoted
-    ) 
-{
-    Election storage election = elections[electionId];
-    return (
-        election.details.electionTitle,
-        election.candidates.length,
-        election.voterList.length,
-        election.votersWhoHaveVoted.length
-    );
-}
-
-
-    function generateRandomNumber() public returns (uint256) {
-        uint256 randomNumber = uint256(keccak256(abi.encodePacked(block.timestamp, msg.sender))) % 900000;
-        generatedNumbers[msg.sender].push(GeneratedNumber({
-            number: randomNumber,
-            timestamp: block.timestamp
-        }));
-        return randomNumber;
-    }
-
-    function announceWinner(uint256 electionId) internal electionExists(electionId) electionEnded(electionId) {
-        uint256 winningVoteCount = 0;
-        uint256 winnerId = 0;
-
-        for (uint256 i = 0; i < elections[electionId].candidates.length; i++) {
-            if (elections[electionId].candidates[i].voteCount > winningVoteCount) {
-                winningVoteCount = elections[electionId].candidates[i].voteCount;
-                winnerId = elections[electionId].candidates[i].id;
-            }
-        }
-
-        elections[electionId].winnerId = winnerId;
-
-        emit WinnerAnnounced(
-            electionId,
-            winnerId,
-            elections[electionId].candidates[winnerId].name,
-            winningVoteCount
-        );
-    }
-
-    function closeElection(uint256 electionId) public electionExists(electionId) onlyAdmin(electionId) {
-        require(elections[electionId].details.electionAvailability == true, "Election is already closed.");
-        elections[electionId].details.electionAvailability = false;
-        emit ElectionClosed(
-            electionId,
-            block.timestamp
-        );
-    }
-
-   function registerVoter(
-    uint256 electionId, 
-    address voterAddress, 
-    uint64 OTP, 
-    uint256 phoneNumber, 
+  function registerVoter(
+    uint256 electionId,
+    address voterAddress,
+    uint64 OTP,
+    uint256 phoneNumber,
     uint256 timeRegister
-) 
-    public 
-    electionExists(electionId) 
-{
-    require(msg.sender == voterAddress, "you can't register for others");
-    require(OTP == generatedNumbers[msg.sender][generatedNumbers[msg.sender].length - 1].number);
-    require(block.timestamp >= elections[electionId].details.electionRegistrationStartTime, "Registration has not started.");
-    require(block.timestamp <= elections[electionId].details.electionRegistrationEndTime, "Registration has ended.");
-    require(!elections[electionId].details.hasStarted, "Cannot register voters after the election has started.");
-
+) public electionExists(electionId) {
+    require(msg.sender == voterAddress, "Cannot register for others.");
+    require(electionToToken[electionId][voterAddress] == 0, "Voter already registered.");
+    
     Election storage election = elections[electionId];
     require(!election.voters[voterAddress].isRegistered, "Voter is already registered.");
 
+    // Mint the token directly here
+    uint256 tokenId = tokenIdCounter++;
+    _safeMint(voterAddress, tokenId);
+
+    soulboundTokens[tokenId] = SoulboundToken({
+        tokenId: tokenId,
+        electionId: electionId,
+        owner: voterAddress,
+        isUsed: false
+    });
+
+    electionToToken[electionId][voterAddress] = tokenId;
+
+    // Register the voter
     election.voters[voterAddress] = Voter({
         voterAddress: voterAddress,
         isRegistered: true,
@@ -413,135 +245,147 @@ struct Election {
         phoneNumber: phoneNumber,
         timeRegister: timeRegister
     });
-       
 
     election.voterList.push(voterAddress);
 
-    emit VoterRegistered(
-        electionId,
-        voterAddress
-    );
+    emit VoterRegistered(electionId, voterAddress);
 }
 
 
-  function vote(uint256 electionId, uint256 candidateId) public electionExists(electionId) electionAvailable(electionId) {
-    Election storage election = elections[electionId];
-    Voter storage voter = election.voters[msg.sender];
+    // Voting Function
+    function vote(uint256 electionId, uint256 candidateId) public electionExists(electionId) electionAvailable(electionId) {
+        uint256 tokenId = electionToToken[electionId][msg.sender];
+        require(tokenId > 0, "Voter does not have a token.");
+        require(!soulboundTokens[tokenId].isUsed, "Token has already been used.");
 
-    require(voter.isRegistered, "You are not registered to vote.");
-    require(!voter.hasVoted, "You have already voted.");
-    require(block.timestamp >= election.details.electionStartTime, "Election has not started yet.");
-    require(block.timestamp <= election.details.electionEndTime, "Election has already ended.");
+        Election storage election = elections[electionId];
+        require(!election.voters[msg.sender].hasVoted, "You have already voted.");
+        require(block.timestamp >= election.details.electionStartTime, "Election has not started yet.");
+        require(block.timestamp <= election.details.electionEndTime, "Election has already ended.");
 
-    bool candidateExists = false;
-    for (uint256 i = 0; i < election.candidates.length; i++) {
-        if (election.candidates[i].id == candidateId) {
-            candidateExists = true;
-            break;
-        }
+        election.candidates[candidateId].voteCount++;
+        election.voters[msg.sender].hasVoted = true;
+
+        soulboundTokens[tokenId].isUsed = true;
+
+        emit Voted(electionId, msg.sender, candidateId);
     }
-    require(candidateExists, "Candidate does not exist.");
-
-    election.candidates[candidateId].voteCount++;
-    voter.hasVoted = true;
-    voter.votedCandidateId = candidateId;
-
-    election.votersWhoHaveVoted.push(msg.sender);
-
-    emit Voted(
-        electionId,
-        msg.sender,
-        candidateId
-    );
-
-    if (block.timestamp >= election.details.electionEndTime) {
-        election.details.hasEnded = true;
-        emit ElectionEnded(electionId, block.timestamp);
-        announceWinner(electionId);
-    }
-}
-
-
+    // Retrieve Election Details
     function getElectionDetails(uint256 electionId) 
-    public 
-    view 
-    electionExists(electionId) 
-    returns (ElectionDetails memory, Candidate[] memory) 
-{
-    ElectionDetails memory electionDetails = elections[electionId].details;
-    Candidate[] memory electionCandidates = elections[electionId].candidates;
-    return (electionDetails, electionCandidates);
-}
-function getCandidateInfo(uint256 electionId, uint256 candidateId) 
-    public 
-    view 
-    electionExists(electionId) 
-    returns (Candidate memory) 
-{
-    require(candidateId < elections[electionId].candidates.length, "Invalid candidate ID");
-    return elections[electionId].candidates[candidateId];
-}
-
-
-
-    // Function to return all elections with details and candidate information
-   function getAllElections() public view returns (ElectionData[] memory) {
-    ElectionData[] memory allElections = new ElectionData[](electionCount);
-
-    for (uint256 i = 1; i <= electionCount; i++) {
-        allElections[i - 1] = ElectionData({
-            details: elections[i].details,
-            candidates: elections[i].candidates
-        });
+        public 
+        view 
+        electionExists(electionId) 
+        returns (ElectionData memory) 
+    {
+        Election storage election = elections[electionId];
+        return ElectionData({details: election.details, candidates: election.candidates});
     }
 
-    return allElections;
-}
+    // Retrieve All Elections for an Admin
+    function getElectionsByAdmin(address admin) public view returns (ElectionData[] memory) {
+        uint256[] memory adminElectionIds = electionsByAdmin[admin];
+        ElectionData[] memory result = new ElectionData[](adminElectionIds.length);
 
+        for (uint256 i = 0; i < adminElectionIds.length; i++) {
+            uint256 electionId = adminElectionIds[i];
+            result[i] = getElectionDetails(electionId);
+        }
 
-    // Function to return all elections a voter is registered for
-    function getElectionsForVoter(address voter) public view returns (uint256[] memory) {
-        uint256[] memory electionIds = electionsByAdmin[voter];
-        return electionIds;
+        return result;
     }
 
-    function getCandidates(uint256 electionId) public view electionExists(electionId) returns (Candidate[] memory) {
-        return elections[electionId].candidates;
+    // Retrieve Voter Information
+    function getVoterInfo(uint256 electionId, address voter) 
+        public 
+        view 
+        electionExists(electionId) 
+        returns (Voter memory) 
+    {
+        return elections[electionId].voters[voter];
     }
 
-    function getVoterInfo(uint256 electionId, address voterAddress) 
-    public 
-    view 
-    electionExists(electionId) 
-    returns (
-        address _voterAddress,
-        uint256 _phoneNumber,
-        uint256 _timeRegister
-    ) 
-{
-    Election storage election = elections[electionId];
-    
-    
-    require(election.voters[voterAddress].isRegistered, "Voter is not registered.");
+    // End Election
+    function endElection(uint256 electionId) public electionExists(electionId) onlyAdmin(electionId) {
+        Election storage election = elections[electionId];
+        require(block.timestamp > election.details.electionEndTime, "Election is still ongoing.");
+        require(!election.details.hasEnded, "Election has already ended.");
 
-    Voter memory voter = election.voters[voterAddress];
+        election.details.hasEnded = true;
 
-    return (
-        voter.voterAddress,
-        voter.phoneNumber,
-        voter.timeRegister
-    );
-}
+        // Determine winner
+        uint256 maxVotes = 0;
+        uint256 winnerId = 0;
+        string memory winnerName = "";
 
-function getVotersWhoHaveVoted(uint256 electionId) public view electionExists(electionId) returns (address[] memory) {
-    return elections[electionId].votersWhoHaveVoted;
-}
+        for (uint256 i = 0; i < election.candidates.length; i++) {
+            if (election.candidates[i].voteCount > maxVotes) {
+                maxVotes = election.candidates[i].voteCount;
+                winnerId = election.candidates[i].id;
+                winnerName = election.candidates[i].name;
+            }
+        }
 
-    function getVoterList(uint256 electionId) public view electionExists(electionId) returns (address[] memory) {
+        election.winnerId = winnerId;
+
+        emit WinnerAnnounced(electionId, winnerId, winnerName, maxVotes);
+        emit ElectionClosed(electionId, block.timestamp);
+    }
+
+    // Retrieve All Voters in an Election
+    function getAllVoters(uint256 electionId) 
+        public 
+        view 
+        electionExists(electionId) 
+        returns (address[] memory) 
+    {
         return elections[electionId].voterList;
     }
 
-    function getGeneratedNumbers() public view returns (GeneratedNumber[] memory) {
-        return generatedNumbers[msg.sender];
+    // Retrieve All Candidates in an Election
+    function getAllCandidates(uint256 electionId) 
+        public 
+        view 
+        electionExists(electionId) 
+        returns (Candidate[] memory) 
+    {
+        return elections[electionId].candidates;
+    }
+
+    // Retrieve Token Information
+    function getTokenDetails(uint256 tokenId) public view returns (SoulboundToken memory) {
+        return soulboundTokens[tokenId];
+    }
+
+    // Retrieve All Tokens Owned by a Wallet
+    function getTokensByOwner(address owner) public view returns (SoulboundToken[] memory) {
+        return soulboundTokensByOwner[owner];
+    }
+
+    // Check if a Voter Has Voted
+    function hasVoterVoted(uint256 electionId, address voter) public view electionExists(electionId) returns (bool) {
+        uint256 tokenId = electionToToken[electionId][voter];
+        return soulboundTokens[tokenId].isUsed;
+    }
+
+    // Utility Functions
+    function isTokenUsed(uint256 tokenId) public view returns (bool) {
+        return soulboundTokens[tokenId].isUsed;
+    }
+
+    function _transfer(
+    address from,
+    address to,
+    uint256 tokenId
+) internal override view {
+        require(from == msg.sender && ownerOf(tokenId)==msg.sender,"Only token owner can transfer tokens.");
+}
+
+ 
+
+    // Burn Tokens for Debugging (Optional)
+    function burnToken(uint256 tokenId) public {
+        require(ownerOf(tokenId) == msg.sender, "You can only burn your own tokens.");
+        _burn(tokenId);
+        delete soulboundTokens[tokenId];
     }
 }
